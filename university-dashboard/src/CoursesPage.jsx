@@ -1,16 +1,4 @@
 // ─── ENHANCED COURSES PAGE ────────────────────────────────────────────────────
-// Drop this file into src/CoursesPage.jsx and import it in App.jsx
-// Replace the old CoursesPage component with this one.
-//
-// USAGE in App.jsx:
-//   import CoursesPage from './CoursesPage';
-//   ... then in your route/tab switch:
-//   {activeTab === "courses" && <CoursesPage dm={dm} user={user || MOCK_USER} />}
-//
-// DEPENDENCIES (already in your project): lucide-react, recharts
-// NEW DEP: npm install anthropic  ← for AI summaries (or use fetch, already done here)
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { useState, useEffect, useRef } from "react";
 import {
   BookOpen, Plus, X, Check, Clock, Calendar, FileText,
