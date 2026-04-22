@@ -93,6 +93,15 @@ export default function CoursesPage({ dm, user }) {
     const courseId = applyModal.course ? applyModal.course.id : parseInt(applySelectId);
     const course = COURSE_CATALOGUE.find(c => c.id === courseId);
     if (!course) return;
+
+    const duplicatePending = pendingApps.some(
+      (app) => app.course.id === course.id && app.type === applyModal.type && app.status === "Pending",
+    );
+    if (duplicatePending) {
+      showAlert("warning", "Already Pending", `You already have a pending ${applyModal.type} application for ${course.code}.`);
+      return;
+    }
+
     setPendingApps(prev => [
       ...prev,
       { id: Date.now(), type: applyModal.type, course, reason: applyReason, status: "Pending", date: new Date().toISOString().split("T")[0] }
@@ -306,6 +315,32 @@ export default function CoursesPage({ dm, user }) {
         ) : (
           <><LockKeyhole className="w-4 h-4 shrink-0" /> Registration closed ({REGISTRATION_STATUS.closeDate}). You can view courses. To add/drop, submit an application for approval.</>
         )}
+      </div>
+
+      {/* Course Application Panel */}
+      <div className={`rounded-2xl border px-4 py-3 ${dm ? "bg-gray-900 border-gray-800" : "bg-white border-gray-200"}`}>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className={`text-sm font-semibold ${dm ? "text-white" : "text-gray-900"}`}>Course Application</p>
+            <p className={`text-xs mt-0.5 ${dm ? "text-gray-400" : "text-gray-500"}`}>
+              Apply to add courses for academic review and approval.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => openApplyModal("add")}
+              disabled={!currentUser.fees_paid}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Plus className="w-3.5 h-3.5" /> Apply for Course
+            </button>
+            {pendingApps.length > 0 && (
+              <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                {pendingApps.length} pending
+              </span>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Header Stats */}
