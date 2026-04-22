@@ -1,17 +1,12 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "version": 2,
-  "builds": [
+  "installCommand": "cd university-dashboard && npm install",
+  "buildCommand": "cd university-dashboard && npm run build",
+  "outputDirectory": "university-dashboard/dist",
+  "rewrites": [
     {
-      "src": "university-dashboard/package.json",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "dist"
-      }
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
-  ],
-  "routes": [
-    { "handle": "filesystem" },
-    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }
