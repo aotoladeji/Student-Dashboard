@@ -1,5 +1,5 @@
 // ─── ENHANCED COURSES PAGE ────────────────────────────────────────────────────
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useState } from "react";
 import {
   BookOpen, Plus, X, Check, Clock, Calendar, FileText,
   ChevronRight, ChevronLeft, Download, Bell, Sparkles,
@@ -7,8 +7,12 @@ import {
   GraduationCap, BookMarked, Info, Star, Filter,
   Search, MapPin, Hash, Layers, ArrowLeft, Share2,
   CheckCircle2, Circle, Zap, Brain, ClipboardList,
-  MoreHorizontal, Trash2, CalendarDays, RefreshCw
+  MoreHorizontal, Trash2, CalendarDays, RefreshCw,
+  LockKeyhole, Send, ListChecks
 } from "lucide-react";
+import AlertModal from "./components/common/AlertModal";
+import { REGISTRATION_STATUS, MOCK_USER } from "./data/mockData";
+import { getTimetableData, saveTimetableData } from "./utils/timetableStore";
 
 // ─── FULL COURSE CATALOGUE ────────────────────────────────────────────────────
 const COURSE_CATALOGUE = [
@@ -51,6 +55,9 @@ const DAYS_ORDER = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday
 
 // ─── MAIN COMPONENT ───────────────────────────────────────────────────────────
 export default function CoursesPage({ dm, user }) {
+  const currentUser = user || MOCK_USER;
+  const regOpen = REGISTRATION_STATUS.open;
+
   const [view, setView]                 = useState("catalogue");   // catalogue | registered | timetable | detail
   const [registered, setRegistered]     = useState([1,2,4,6]);    // registered course IDs
   const [selectedCourse, setSelectedCourse] = useState(null);
@@ -60,17 +67,54 @@ export default function CoursesPage({ dm, user }) {
   const [toast, setToast]               = useState(null);
   const [timetableType, setTimetableType] = useState("lecture");   // lecture | exam
 
+  // Alert modal state
+  const [alertModal, setAlertModal] = useState({ open: false, type: "info", title: "", message: "" });
+  const showAlert = (type, title, message) => setAlertModal({ open: true, type, title, message });
+
+  // Course application state (for when registration is closed)
+  const [applyModal, setApplyModal] = useState({ open: false, type: "add", course: null });
+  const [applyReason, setApplyReason] = useState("");
+  const [pendingApps, setPendingApps] = useState([]);
+  const [applySelectId, setApplySelectId] = useState("");
+
   const showToast = (msg, type="success") => {
     setToast({ msg, type });
     setTimeout(() => setToast(null), 3000);
   };
 
+  const openApplyModal = (type, course = null) => {
+    setApplyReason("");
+    setApplySelectId(course ? String(course.id) : "");
+    setApplyModal({ open: true, type, course });
+  };
+
+  const submitApplication = () => {
+    if (!applyReason.trim()) return;
+    const courseId = applyModal.course ? applyModal.course.id : parseInt(applySelectId);
+    const course = COURSE_CATALOGUE.find(c => c.id === courseId);
+    if (!course) return;
+    setPendingApps(prev => [
+      ...prev,
+      { id: Date.now(), type: applyModal.type, course, reason: applyReason, status: "Pending", date: new Date().toISOString().split("T")[0] }
+    ]);
+    setApplyModal({ open: false, type: "add", course: null });
+    showAlert("success", "Application Submitted", `Your application to ${applyModal.type === "add" ? "add" : "drop"} ${course.code} has been submitted and is awaiting approval.`);
+  };
+
   const toggleReg = (course) => {
-    if (!user.fees_paid) { showToast("⚠️ Pay your school fees first!", "error"); return; }
+    if (!currentUser.fees_paid) {
+      showAlert("error", "Fees Not Paid", "You must pay your school fees before registering for courses.");
+      return;
+    }
+    if (!regOpen) {
+      openApplyModal(registered.includes(course.id) ? "drop" : "add", course);
+      return;
+    }
     const max = 24;
     const totalUnits = COURSE_CATALOGUE.filter(c => registered.includes(c.id)).reduce((s,c)=>s+c.units,0);
     if (!registered.includes(course.id) && totalUnits + course.units > max) {
-      showToast(`⚠️ Max 24 units allowed. You have ${totalUnits} units.`, "error"); return;
+      showAlert("warning", "Unit Limit Reached", `Maximum 24 units allowed. You currently have ${totalUnits} units registered.`);
+      return;
     }
     setRegistered(r => r.includes(course.id) ? r.filter(x=>x!==course.id) : [...r, course.id]);
     showToast(registered.includes(course.id) ? `❌ Dropped ${course.code}` : `✅ Registered for ${course.code}`);
@@ -145,7 +189,6 @@ export default function CoursesPage({ dm, user }) {
         onBack={() => { setView("registered"); setDetailTab("info"); }}
         detailTab={detailTab}
         setDetailTab={setDetailTab}
-        isRegistered={registered.includes(selectedCourse.id)}
         announcements={LECTURER_ANNOUNCEMENTS[selectedCourse.id] || []}
         assignments={ASSIGNMENTS_BY_COURSE[selectedCourse.id] || []}
       />
@@ -154,12 +197,116 @@ export default function CoursesPage({ dm, user }) {
 
   return (
     <div className="space-y-4">
+      {/* Alert Modal */}
+      <AlertModal
+        open={alertModal.open}
+        onClose={() => setAlertModal(p => ({ ...p, open: false }))}
+        type={alertModal.type}
+        title={alertModal.title}
+        message={alertModal.message}
+        dm={dm}
+      />
+
+      {/* Apply for Add/Drop Modal */}
+      {applyModal.open && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4">
+          <div className={`w-full max-w-sm my-auto rounded-2xl shadow-xl p-5 space-y-4 ${dm ? "bg-gray-800" : "bg-white"}`}>
+            <div className="flex items-center justify-between">
+              <h3 className={`font-bold text-base ${dm ? "text-white" : "text-gray-900"}`}>
+                Apply to {applyModal.type === "add" ? "Add" : "Drop"} Course
+              </h3>
+              <button onClick={() => setApplyModal(p => ({ ...p, open: false }))} className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Registration closed notice */}
+            <div className={`flex items-start gap-2 rounded-xl p-3 text-xs ${dm ? "bg-amber-900/30 text-amber-300" : "bg-amber-50 text-amber-700"} border ${dm ? "border-amber-800" : "border-amber-200"}`}>
+              <LockKeyhole className="w-4 h-4 shrink-0 mt-0.5" />
+              <p>Registration is currently closed (closed {REGISTRATION_STATUS.closeDate}). Applications are reviewed by the academic office. Next opening: <strong>{REGISTRATION_STATUS.nextOpenDate}</strong>.</p>
+            </div>
+
+            {/* Course selector (when no course pre-selected) */}
+            {!applyModal.course && (
+              <div>
+                <label className={`block text-xs font-semibold mb-1 ${dm ? "text-gray-300" : "text-gray-600"}`}>Select Course</label>
+                <select
+                  value={applySelectId}
+                  onChange={e => setApplySelectId(e.target.value)}
+                  className={`w-full rounded-xl border px-3 py-2 text-sm outline-none ${dm ? "bg-gray-700 border-gray-600 text-white" : "bg-white border-gray-300 text-gray-900"}`}
+                >
+                  <option value="">— Choose a course —</option>
+                  {(applyModal.type === "add"
+                    ? COURSE_CATALOGUE.filter(c => !registered.includes(c.id))
+                    : COURSE_CATALOGUE.filter(c => registered.includes(c.id))
+                  ).map(c => (
+                    <option key={c.id} value={c.id}>{c.code} — {c.title}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Pre-selected course info */}
+            {applyModal.course && (
+              <div className={`rounded-xl p-3 text-sm ${dm ? "bg-gray-700" : "bg-gray-50"}`}>
+                <p className="text-xs font-bold text-indigo-500">{applyModal.course.code}</p>
+                <p className={`font-semibold ${dm ? "text-white" : "text-gray-900"}`}>{applyModal.course.title}</p>
+                <p className={`text-xs mt-0.5 ${dm ? "text-gray-400" : "text-gray-500"}`}>{applyModal.course.units} units · {applyModal.course.lecturer}</p>
+              </div>
+            )}
+
+            {/* Reason */}
+            <div>
+              <label className={`block text-xs font-semibold mb-1 ${dm ? "text-gray-300" : "text-gray-600"}`}>Reason / Justification <span className="text-red-500">*</span></label>
+              <textarea
+                value={applyReason}
+                onChange={e => setApplyReason(e.target.value)}
+                rows={3}
+                placeholder="Explain why you need to add or drop this course..."
+                className={`w-full rounded-xl border px-3 py-2 text-sm outline-none resize-none ${dm ? "bg-gray-700 border-gray-600 text-white placeholder-gray-500" : "bg-white border-gray-300 text-gray-900 placeholder-gray-400"}`}
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button onClick={() => setApplyModal(p => ({ ...p, open: false }))}
+                className={`flex-1 rounded-xl border py-2 text-sm font-medium ${dm ? "border-gray-600 text-gray-300 hover:bg-gray-700" : "border-gray-300 text-gray-600 hover:bg-gray-50"}`}>
+                Cancel
+              </button>
+              <button
+                onClick={submitApplication}
+                disabled={!applyReason.trim() || (!applyModal.course && !applySelectId)}
+                className="flex-1 flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Send className="w-3.5 h-3.5" /> Submit Application
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toast */}
       {toast && (
         <div className={`fixed top-20 right-4 z-50 px-4 py-3 rounded-xl text-sm font-medium shadow-xl fade-up ${toast.type==="error" ? "bg-red-500 text-white" : "bg-emerald-500 text-white"}`}>
           {toast.msg}
         </div>
       )}
+
+      {/* Registration Status Banner */}
+      <div className={`flex items-center gap-2 rounded-2xl px-4 py-3 text-xs font-medium border ${
+        !currentUser.fees_paid
+          ? dm ? "bg-red-900/30 border-red-800 text-red-300" : "bg-red-50 border-red-200 text-red-700"
+          : regOpen
+          ? dm ? "bg-emerald-900/30 border-emerald-800 text-emerald-300" : "bg-emerald-50 border-emerald-200 text-emerald-700"
+          : dm ? "bg-amber-900/30 border-amber-800 text-amber-300" : "bg-amber-50 border-amber-200 text-amber-700"
+      }`}>
+        {!currentUser.fees_paid ? (
+          <><AlertCircle className="w-4 h-4 shrink-0" /> Fees unpaid — course registration is locked until fees are cleared.</>
+        ) : regOpen ? (
+          <><CheckCircle2 className="w-4 h-4 shrink-0" /> Registration is open. You can add or drop courses freely.</>
+        ) : (
+          <><LockKeyhole className="w-4 h-4 shrink-0" /> Registration closed ({REGISTRATION_STATUS.closeDate}). You can view courses. To add/drop, submit an application for approval.</>
+        )}
+      </div>
 
       {/* Header Stats */}
       <div className="grid grid-cols-3 gap-3">
@@ -182,12 +329,15 @@ export default function CoursesPage({ dm, user }) {
           { id:"catalogue",  label:"Browse Courses",  icon:BookOpen },
           { id:"registered", label:"My Courses",      icon:BookMarked },
           { id:"timetable",  label:"Timetable",       icon:CalendarDays },
-        ].map(({ id, label, icon:Icon }) => (
-          <button key={id} onClick={()=>setView(id)}
-            className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all ${view===id ? "bg-indigo-600 text-white shadow-md" : dm?"text-gray-400 hover:text-white":"text-gray-500 hover:text-gray-800"}`}>
-            <Icon className="w-3.5 h-3.5"/>{label}
-          </button>
-        ))}
+        ].map(({ id, label, icon }) => {
+          const TabIcon = icon;
+          return (
+            <button key={id} onClick={()=>setView(id)}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold transition-all ${view===id ? "bg-indigo-600 text-white shadow-md" : dm?"text-gray-400 hover:text-white":"text-gray-500 hover:text-gray-800"}`}>
+              <TabIcon className="w-3.5 h-3.5"/>{label}
+            </button>
+          );
+        })}
       </div>
 
       {/* ── CATALOGUE VIEW ── */}
@@ -212,40 +362,86 @@ export default function CoursesPage({ dm, user }) {
 
           <p className={`text-xs font-medium ${dm?"text-gray-500":"text-gray-400"}`}>{filtered.length} courses · {semFilter} Semester</p>
 
-          {filtered.map(course => {
-            const isReg = registered.includes(course.id);
-            return (
-              <div key={course.id} className={`rounded-2xl p-4 border transition-all ${isReg ? dm?"border-indigo-700 bg-indigo-950/40":"border-indigo-200 bg-indigo-50/60" : dm?"bg-gray-900 border-gray-800 hover:border-gray-700":"bg-white border-gray-100 hover:border-gray-200"}`}>
-                <div className="flex items-start gap-3">
-                  <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-xs font-bold flex-shrink-0 ${isReg?"bg-indigo-600 text-white":dm?"bg-gray-800 text-gray-400":"bg-gray-100 text-gray-600"}`}>
-                    {course.units}U
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className={`text-xs font-bold ${isReg?"text-indigo-600":"text-indigo-500"}`}>{course.code}</p>
-                        <p className={`text-sm font-semibold leading-tight ${dm?"text-white":"text-gray-900"}`}>{course.title}</p>
-                      </div>
-                      <button onClick={()=>toggleReg(course)}
-                        className={`flex-shrink-0 text-xs px-3 py-1.5 rounded-xl font-semibold transition-all ${isReg?"bg-red-50 text-red-600 border border-red-200 hover:bg-red-100":"bg-indigo-600 text-white hover:bg-indigo-700"}`}>
-                        {isReg ? "Drop" : "+ Add"}
-                      </button>
-                    </div>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      <span className={`text-xs flex items-center gap-1 ${dm?"text-gray-400":"text-gray-500"}`}><User className="w-3 h-3"/>{course.lecturer}</span>
-                      <span className={`text-xs flex items-center gap-1 ${dm?"text-gray-400":"text-gray-500"}`}><Clock className="w-3 h-3"/>{course.days.join(", ")} · {course.time}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+          <div className={`rounded-2xl border overflow-hidden ${dm ? "border-gray-800" : "border-gray-200"}`}>
+            <div className={`overflow-x-auto ${dm ? "bg-gray-900" : "bg-white"}`}>
+              <table className="w-full text-sm" style={{ minWidth: "920px" }}>
+                <thead>
+                  <tr className={`${dm ? "bg-gray-800 text-gray-300" : "bg-gray-50 text-gray-600"}`}>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide">Course Code</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide">Course Title</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide">Level</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide">Course Type</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide">Course Unit</th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide">Action</th>
+                  </tr>
+                </thead>
+                <tbody className={`${dm ? "divide-y divide-gray-800" : "divide-y divide-gray-100"}`}>
+                  {filtered.map((course) => {
+                    const isReg = registered.includes(course.id);
+                    const courseType = (course.dept === currentUser.department || course.code.startsWith("GST")) ? "COMPULSORY" : "ELECTIVE";
+
+                    return (
+                      <tr key={course.id} className={`${isReg ? (dm ? "bg-indigo-950/20" : "bg-indigo-50/60") : ""}`}>
+                        <td className="px-4 py-3 font-semibold text-indigo-500 whitespace-nowrap">{course.code}</td>
+                        <td className="px-4 py-3">
+                          <p className={`font-semibold ${dm ? "text-white" : "text-gray-900"}`}>{course.title}</p>
+                          <p className={`mt-1 text-xs ${dm ? "text-gray-400" : "text-gray-500"}`}>{course.days.join(", ")} · {course.time}</p>
+                        </td>
+                        <td className={`px-4 py-3 ${dm ? "text-gray-300" : "text-gray-700"}`}>{course.level}</td>
+                        <td className="px-4 py-3">
+                          <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${courseType === "COMPULSORY" ? "bg-red-100 text-red-700" : "bg-emerald-100 text-emerald-700"}`}>
+                            {courseType}
+                          </span>
+                        </td>
+                        <td className={`px-4 py-3 font-semibold ${dm ? "text-white" : "text-gray-900"}`}>{course.units}</td>
+                        <td className="px-4 py-3">
+                          {!currentUser.fees_paid ? (
+                            <span className="inline-flex items-center gap-1 text-xs px-2 py-1.5 rounded-lg bg-gray-100 text-gray-400 border border-gray-200 cursor-not-allowed">
+                              <LockKeyhole className="w-3 h-3" /> Locked
+                            </span>
+                          ) : !regOpen ? (
+                            <button
+                              onClick={() => openApplyModal(isReg ? "drop" : "add", course)}
+                              className="text-xs px-3 py-1.5 rounded-lg font-semibold bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100"
+                            >
+                              {isReg ? "Apply Drop" : "Apply Add"}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => toggleReg(course)}
+                              className={`text-xs px-3 py-1.5 rounded-lg font-semibold transition-all ${isReg ? "bg-red-50 text-red-600 border border-red-200 hover:bg-red-100" : "bg-indigo-600 text-white hover:bg-indigo-700"}`}
+                            >
+                              {isReg ? "Drop" : "+ Add"}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
 
       {/* ── MY COURSES VIEW ── */}
       {view === "registered" && (
         <div className="space-y-3">
+          {/* Apply button when registration closed */}
+          {!regOpen && currentUser.fees_paid && (
+            <div className="flex gap-2">
+              <button onClick={() => openApplyModal("add")}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold bg-indigo-600 text-white hover:bg-indigo-700">
+                <Plus className="w-3.5 h-3.5" /> Apply to Add Course
+              </button>
+              <button onClick={() => openApplyModal("drop")}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-xs font-semibold bg-red-50 text-red-600 border border-red-200 hover:bg-red-100">
+                <Trash2 className="w-3.5 h-3.5" /> Apply to Drop Course
+              </button>
+            </div>
+          )}
+
           {registeredCourses.length === 0 ? (
             <div className={`rounded-2xl p-10 text-center border ${dm?"border-gray-800":"border-gray-100"}`}>
               <BookOpen className={`w-10 h-10 mx-auto mb-3 ${dm?"text-gray-700":"text-gray-300"}`}/>
@@ -256,7 +452,7 @@ export default function CoursesPage({ dm, user }) {
             <button key={course.id} onClick={()=>{ setSelectedCourse(course); setView("detail"); setDetailTab("info"); }}
               className={`w-full text-left rounded-2xl p-4 border transition-all card-hover ${dm?"bg-gray-900 border-gray-800 hover:border-indigo-700":"bg-white border-gray-100 hover:border-indigo-200"}`}>
               <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                <div className="w-11 h-11 rounded-xl bg-linear-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold shrink-0">
                   {course.units}U
                 </div>
                 <div className="flex-1 min-w-0">
@@ -276,6 +472,34 @@ export default function CoursesPage({ dm, user }) {
               </div>
             </button>
           ))}
+
+          {/* Pending Applications */}
+          {pendingApps.length > 0 && (
+            <div className={`rounded-2xl border overflow-hidden ${dm ? "border-gray-800" : "border-gray-200"}`}>
+              <div className={`flex items-center gap-2 px-4 py-3 border-b ${dm ? "bg-gray-900 border-gray-800" : "bg-gray-50 border-gray-200"}`}>
+                <ListChecks className="w-4 h-4 text-amber-500" />
+                <p className={`text-sm font-semibold ${dm ? "text-white" : "text-gray-900"}`}>Pending Applications</p>
+                <span className="ml-auto text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-medium">{pendingApps.length}</span>
+              </div>
+              <div className="divide-y divide-gray-100 dark:divide-gray-800">
+                {pendingApps.map(app => (
+                  <div key={app.id} className={`px-4 py-3 flex items-start gap-3 ${dm ? "bg-gray-900" : "bg-white"}`}>
+                    <span className={`mt-0.5 text-xs font-bold px-2 py-0.5 rounded-full ${app.type === "add" ? "bg-indigo-100 text-indigo-700" : "bg-red-100 text-red-600"}`}>
+                      {app.type === "add" ? "+ ADD" : "− DROP"}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className={`text-sm font-semibold ${dm ? "text-white" : "text-gray-900"}`}>{app.course.code} — {app.course.title}</p>
+                      <p className={`text-xs mt-0.5 ${dm ? "text-gray-400" : "text-gray-500"}`}>{app.reason}</p>
+                      <p className={`text-xs mt-0.5 ${dm ? "text-gray-500" : "text-gray-400"}`}>Submitted {app.date}</p>
+                    </div>
+                    <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">
+                      {app.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -295,8 +519,98 @@ export default function CoursesPage({ dm, user }) {
 
 // ─── TIMETABLE VIEW ───────────────────────────────────────────────────────────
 function TimetableView({ dm, registeredCourses, timetableType, setTimetableType, onExport }) {
-  const timeSlots = ["8:00 AM","9:00 AM","10:00 AM","11:00 AM","12:00 PM","1:00 PM","2:00 PM","3:00 PM"];
+  const timeSlots = ["8:00 AM","9:00 AM","10:00 AM","11:00 AM","12:00 PM","1:00 PM","2:00 PM","3:00 PM","4:00 PM","5:00 PM"];
+  const allDays   = ["Monday","Tuesday","Wednesday","Thursday","Friday"];
   const colors    = ["indigo","purple","blue","emerald","amber","rose","teal","orange"];
+
+  // ── editable state ──────────────────────────────────────────────────────────
+  const [editMode,      setEditMode]      = useState(false);
+  const [overrides,     setOverrides]     = useState({});      // { courseId: { days:[], time, venue } }
+  const [examOverrides, setExamOverrides] = useState({});      // { courseId: { examDate, examTime, examVenue } }
+  const [customEntries, setCustomEntries] = useState([]);      // [{ id, day, timeSlot, label, color }]
+  const [editPanel,     setEditPanel]     = useState(null);    // { type:"course"|"exam"|"custom"|"new", data }
+  const [examNotes,     setExamNotes]     = useState({});      // { courseId: noteString }
+
+  // scratch state inside panel
+  const [scratch, setScratch] = useState({});
+
+  const openPanel = (type, data) => {
+    setScratch({ ...data });
+    setEditPanel({ type, data });
+  };
+  const closePanel = () => { setEditPanel(null); setScratch({}); };
+
+  useEffect(() => {
+    const saved = getTimetableData();
+    setOverrides(saved.lectureOverrides || {});
+    setExamOverrides(saved.examOverrides || {});
+    setCustomEntries(saved.customEntries || []);
+    setExamNotes(saved.examNotes || {});
+  }, []);
+
+  useEffect(() => {
+    const lectureCourses = registeredCourses.map((course) => {
+      const lectureOverride = overrides[course.id] || {};
+      const examOverride = examOverrides[course.id] || {};
+      return {
+        id: course.id,
+        code: course.code,
+        title: course.title,
+        days: lectureOverride.days ?? course.days,
+        time: lectureOverride.time ?? course.time,
+        venue: lectureOverride.venue ?? course.venue,
+      };
+    });
+
+    const examCourses = registeredCourses.map((course) => {
+      const examOverride = examOverrides[course.id] || {};
+      return {
+        id: course.id,
+        code: course.code,
+        title: course.title,
+        examDate: examOverride.examDate ?? course.examDate,
+        examTime: examOverride.examTime ?? course.examTime,
+        examVenue: examOverride.examVenue ?? course.examVenue,
+      };
+    });
+
+    saveTimetableData({
+      lectureCourses,
+      examCourses,
+      lectureOverrides: overrides,
+      examOverrides,
+      customEntries,
+      examNotes,
+    });
+  }, [registeredCourses, overrides, examOverrides, customEntries, examNotes]);
+
+  const savePanel = () => {
+    if (editPanel.type === "course") {
+      setOverrides(p => ({ ...p, [scratch.id]: { days: scratch.days, time: scratch.time, venue: scratch.venue } }));
+    } else if (editPanel.type === "exam") {
+      setExamOverrides(p => ({ ...p, [scratch.id]: { examDate: scratch.examDate, examTime: scratch.examTime, examVenue: scratch.examVenue } }));
+    } else if (editPanel.type === "custom") {
+      setCustomEntries(p => p.map(e => e.id === scratch.id ? { ...scratch } : e));
+    } else if (editPanel.type === "new") {
+      setCustomEntries(p => [...p, { ...scratch, id: Date.now() }]);
+    }
+    closePanel();
+  };
+
+  const deleteEntry = (id) => {
+    setCustomEntries(p => p.filter(e => e.id !== id));
+    closePanel();
+  };
+
+  const resetOverride = (courseId) => {
+    setOverrides(p => { const n = { ...p }; delete n[courseId]; return n; });
+    closePanel();
+  };
+
+  const resetExamOverride = (courseId) => {
+    setExamOverrides(p => { const n = { ...p }; delete n[courseId]; return n; });
+    closePanel();
+  };
 
   const getCourseColor = (idx) => {
     const c = colors[idx % colors.length];
@@ -313,6 +627,57 @@ function TimetableView({ dm, registeredCourses, timetableType, setTimetableType,
     return map[c];
   };
 
+  const customColorMap = {
+    indigo: "bg-indigo-100 text-indigo-700 border-indigo-300",
+    purple: "bg-purple-100 text-purple-700 border-purple-300",
+    emerald:"bg-emerald-100 text-emerald-700 border-emerald-300",
+    rose:   "bg-rose-100 text-rose-700 border-rose-300",
+    amber:  "bg-amber-100 text-amber-700 border-amber-300",
+    teal:   "bg-teal-100 text-teal-700 border-teal-300",
+  };
+
+  // resolve effective days/time/venue for a course (override or original)
+  const resolved = (course) => {
+    const ov = overrides[course.id];
+    return {
+      days:  ov?.days  ?? course.days,
+      time:  ov?.time  ?? course.time,
+      venue: ov?.venue ?? course.venue,
+    };
+  };
+
+  const resolvedExam = (course) => {
+    const ov = examOverrides[course.id];
+    return {
+      examDate: ov?.examDate ?? course.examDate,
+      examTime: ov?.examTime ?? course.examTime,
+      examVenue: ov?.examVenue ?? course.examVenue,
+    };
+  };
+
+  const handleCellClick = (day, slot) => {
+    if (!editMode) return;
+
+    // check if a registered course sits here
+    const course = registeredCourses.find(c => {
+      const r = resolved(c);
+      return r.days.includes(day) && r.time.split("–")[0].trim().toLowerCase() === slot.toLowerCase();
+    });
+    if (course) {
+      const r = resolved(course);
+      openPanel("course", { id: course.id, code: course.code, title: course.title, days: [...r.days], time: r.time, venue: r.venue });
+      return;
+    }
+
+    // check if a custom entry sits here
+    const custom = customEntries.find(e => e.day === day && e.timeSlot === slot);
+    if (custom) { openPanel("custom", { ...custom }); return; }
+
+    // empty cell — add new
+    openPanel("new", { day, timeSlot: slot, label: "", color: "indigo" });
+  };
+
+  // ── RENDER ──────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-4">
       {/* Controls */}
@@ -325,6 +690,13 @@ function TimetableView({ dm, registeredCourses, timetableType, setTimetableType,
             </button>
           ))}
         </div>
+        {(timetableType === "lecture" || timetableType === "exam") && (
+          <button onClick={()=>{ setEditMode(e=>!e); closePanel(); }}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-all ${editMode ? "bg-amber-500 text-white" : dm?"bg-gray-800 text-gray-300 border border-gray-700":"bg-white border border-gray-200 text-gray-600"}`}>
+            <Sparkles className="w-3.5 h-3.5"/>
+            {editMode ? "Done" : "Edit"}
+          </button>
+        )}
         <button onClick={()=>onExport(timetableType)}
           className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 text-white rounded-xl text-xs font-semibold hover:bg-emerald-700 transition-all">
           <Download className="w-3.5 h-3.5"/>
@@ -332,16 +704,32 @@ function TimetableView({ dm, registeredCourses, timetableType, setTimetableType,
         </button>
       </div>
 
-      <div className={`text-xs px-3 py-2 rounded-xl ${dm?"bg-gray-800 text-gray-400":"bg-indigo-50 text-indigo-700"} flex items-center gap-2`}>
-        <Share2 className="w-3.5 h-3.5 flex-shrink-0"/>
-        Tap Export to save as .ics — opens in Google Calendar, Apple Calendar, or Outlook
-      </div>
+      {editMode && timetableType === "lecture" && (
+        <div className={`text-xs px-3 py-2 rounded-xl flex items-center gap-2 ${dm?"bg-amber-900/30 border border-amber-800 text-amber-300":"bg-amber-50 border border-amber-200 text-amber-700"}`}>
+          <Sparkles className="w-3.5 h-3.5 shrink-0"/>
+          Edit mode — tap any course cell to adjust its time/day/venue, or tap an empty cell to add a personal entry.
+        </div>
+      )}
+
+      {editMode && timetableType === "exam" && (
+        <div className={`text-xs px-3 py-2 rounded-xl flex items-center gap-2 ${dm?"bg-amber-900/30 border border-amber-800 text-amber-300":"bg-amber-50 border border-amber-200 text-amber-700"}`}>
+          <Sparkles className="w-3.5 h-3.5 shrink-0"/>
+          Edit mode — tap any exam card to adjust exam date, time, and venue.
+        </div>
+      )}
+
+      {!editMode && timetableType === "lecture" && (
+        <div className={`text-xs px-3 py-2 rounded-xl ${dm?"bg-gray-800 text-gray-400":"bg-indigo-50 text-indigo-700"} flex items-center gap-2`}>
+          <Share2 className="w-3.5 h-3.5 shrink-0"/>
+          Tap Export to save as .ics — opens in Google Calendar, Apple Calendar, or Outlook
+        </div>
+      )}
 
       {/* LECTURE TIMETABLE — Grid */}
       {timetableType === "lecture" && (
         <div className={`rounded-2xl border overflow-hidden ${dm?"border-gray-800":"border-gray-200"}`}>
           {/* Day headers */}
-          <div className={`grid grid-cols-6 ${dm?"bg-gray-900":"bg-gray-50"}`} style={{gridTemplateColumns:"64px repeat(5,1fr)"}}>
+          <div className={`grid ${dm?"bg-gray-900":"bg-gray-50"}`} style={{gridTemplateColumns:"64px repeat(5,1fr)"}}>
             <div className="p-2"/>
             {["Mon","Tue","Wed","Thu","Fri"].map(d => (
               <div key={d} className={`p-2 text-center text-xs font-bold border-l ${dm?"border-gray-800 text-gray-400":"border-gray-200 text-gray-600"}`}>{d}</div>
@@ -349,32 +737,41 @@ function TimetableView({ dm, registeredCourses, timetableType, setTimetableType,
           </div>
 
           {/* Time rows */}
-          {timeSlots.map((slot,si) => (
+          {timeSlots.map((slot) => (
             <div key={slot} className={`grid border-t ${dm?"border-gray-800":"border-gray-100"}`}
               style={{gridTemplateColumns:"64px repeat(5,1fr)"}}>
               <div className={`p-2 text-xs text-right pr-3 ${dm?"text-gray-600":"text-gray-400"} flex items-start justify-end pt-2`}>
                 {slot.replace(":00","")}
               </div>
-              {["Monday","Tuesday","Wednesday","Thursday","Friday"].map((day,di) => {
-                const course = registeredCourses.find(c => {
-                  const courseHour = parseInt(c.time.split(":")[0]);
-                  const slotHour = parseInt(slot.split(":")[0]) + (slot.includes("PM") && !slot.startsWith("12") ? 12 : 0);
-                  return c.days.includes(day) && courseHour === (slot.includes("PM") && !slot.startsWith("12") ? parseInt(slot)-12 : parseInt(slot));
+              {allDays.map((day) => {
+                const coursMatch = registeredCourses.find(c => {
+                  const r = resolved(c);
+                  return r.days.includes(day) && r.time.split("–")[0].trim().toLowerCase() === slot.toLowerCase();
                 });
-                // simpler matching
-                const match = registeredCourses.find(c => {
-                  const timeStart = c.time.split("–")[0].trim().toLowerCase();
-                  const slotLow = slot.toLowerCase();
-                  return c.days.includes(day) && timeStart === slotLow;
-                });
-                const cidx = match ? registeredCourses.indexOf(match) : -1;
-                const col = cidx >= 0 ? getCourseColor(cidx) : null;
+                const cidx = coursMatch ? registeredCourses.indexOf(coursMatch) : -1;
+                const col  = cidx >= 0 ? getCourseColor(cidx) : null;
+                const custom = customEntries.find(e => e.day === day && e.timeSlot === slot);
+                const isOverridden = coursMatch && !!overrides[coursMatch.id];
+
                 return (
-                  <div key={day} className={`border-l p-1 min-h-[44px] ${dm?"border-gray-800":"border-gray-100"}`}>
-                    {match && col && (
-                      <div className={`h-full p-1.5 rounded-lg border ${col.bg} ${col.border} ${col.text}`}>
-                        <p className="text-xs font-bold leading-tight">{match.code}</p>
-                        <p className="text-xs opacity-75 leading-tight truncate">{match.venue.split(",")[0]}</p>
+                  <div key={day}
+                    onClick={() => handleCellClick(day, slot)}
+                    className={`border-l p-1 min-h-11 transition-all ${dm?"border-gray-800":"border-gray-100"} ${editMode ? "cursor-pointer hover:bg-indigo-50/30 dark:hover:bg-indigo-900/10" : ""}`}>
+                    {coursMatch && col && (
+                      <div className={`h-full p-1.5 rounded-lg border ${col.bg} ${col.border} ${col.text} ${editMode?"ring-2 ring-amber-400 ring-offset-1":""}`}>
+                        <p className="text-xs font-bold leading-tight">{coursMatch.code}</p>
+                        <p className="text-xs opacity-75 leading-tight truncate">{resolved(coursMatch).venue.split(",")[0]}</p>
+                        {isOverridden && <span className="text-[9px] font-bold opacity-60">✏ edited</span>}
+                      </div>
+                    )}
+                    {custom && !coursMatch && (
+                      <div className={`h-full p-1.5 rounded-lg border text-xs font-medium ${customColorMap[custom.color] ?? customColorMap.indigo} ${editMode?"ring-2 ring-amber-400 ring-offset-1":""}`}>
+                        {custom.label}
+                      </div>
+                    )}
+                    {editMode && !coursMatch && !custom && (
+                      <div className="h-full w-full flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
+                        <Plus className="w-3 h-3 text-gray-400"/>
                       </div>
                     )}
                   </div>
@@ -390,10 +787,15 @@ function TimetableView({ dm, registeredCourses, timetableType, setTimetableType,
               return (
                 <span key={c.id} className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg ${col.bg} ${col.text}`}>
                   <span className={`w-2 h-2 rounded-full ${col.dot}`}/>
-                  {c.code}
+                  {c.code}{overrides[c.id] ? " ✏" : ""}
                 </span>
               );
             })}
+            {customEntries.map(e => (
+              <span key={e.id} className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-lg ${customColorMap[e.color] ?? customColorMap.indigo}`}>
+                ★ {e.label}
+              </span>
+            ))}
           </div>
         </div>
       )}
@@ -401,16 +803,33 @@ function TimetableView({ dm, registeredCourses, timetableType, setTimetableType,
       {/* EXAM TIMETABLE — List */}
       {timetableType === "exam" && (
         <div className="space-y-2">
+          <p className={`text-xs px-1 ${dm?"text-gray-500":"text-gray-400"}`}>You can add personal notes to each exam.</p>
           {registeredCourses
-            .sort((a,b) => new Date(a.examDate) - new Date(b.examDate))
+            .sort((a,b) => new Date(resolvedExam(a).examDate) - new Date(resolvedExam(b).examDate))
             .map((c,i) => {
+              const exam = resolvedExam(c);
               const col = getCourseColor(i);
-              const examD = new Date(c.examDate);
+              const examD = new Date(exam.examDate);
               const daysLeft = Math.ceil((examD - new Date()) / (1000*60*60*24));
+              const examEdited = !!examOverrides[c.id];
               return (
-                <div key={c.id} className={`rounded-2xl p-4 border ${dm?"bg-gray-900 border-gray-800":"bg-white border-gray-100"}`}>
+                <div
+                  key={c.id}
+                  onClick={() => {
+                    if (!editMode) return;
+                    openPanel("exam", {
+                      id: c.id,
+                      code: c.code,
+                      title: c.title,
+                      examDate: exam.examDate,
+                      examTime: exam.examTime,
+                      examVenue: exam.examVenue,
+                    });
+                  }}
+                  className={`rounded-2xl p-4 border space-y-2 transition-all ${dm?"bg-gray-900 border-gray-800":"bg-white border-gray-100"} ${editMode ? "cursor-pointer hover:border-indigo-400" : ""}`}
+                >
                   <div className="flex items-center gap-3">
-                    <div className={`w-12 h-12 rounded-xl ${col.bg} flex flex-col items-center justify-center flex-shrink-0`}>
+                    <div className={`w-12 h-12 rounded-xl ${col.bg} flex flex-col items-center justify-center shrink-0`}>
                       <p className={`text-sm font-bold leading-none ${col.text}`}>{examD.getDate()}</p>
                       <p className={`text-xs ${col.text} opacity-75`}>{examD.toLocaleString("default",{month:"short"})}</p>
                     </div>
@@ -418,19 +837,190 @@ function TimetableView({ dm, registeredCourses, timetableType, setTimetableType,
                       <p className="text-xs font-bold text-indigo-500">{c.code}</p>
                       <p className={`text-sm font-semibold truncate ${dm?"text-white":"text-gray-900"}`}>{c.title}</p>
                       <div className="flex items-center gap-3 mt-0.5">
-                        <span className={`text-xs flex items-center gap-1 ${dm?"text-gray-400":"text-gray-500"}`}><Clock className="w-3 h-3"/>{c.examTime}</span>
-                        <span className={`text-xs flex items-center gap-1 ${dm?"text-gray-400":"text-gray-500"}`}><MapPin className="w-3 h-3"/>{c.examVenue}</span>
+                        <span className={`text-xs flex items-center gap-1 ${dm?"text-gray-400":"text-gray-500"}`}><Clock className="w-3 h-3"/>{exam.examTime}</span>
+                        <span className={`text-xs flex items-center gap-1 ${dm?"text-gray-400":"text-gray-500"}`}><MapPin className="w-3 h-3"/>{exam.examVenue}</span>
                       </div>
+                      {examEdited && <p className="mt-1 text-[10px] font-bold text-amber-500">✏ Exam updated</p>}
                     </div>
-                    <div className="text-right flex-shrink-0">
+                    <div className="text-right shrink-0">
                       <span className={`text-xs font-bold px-2.5 py-1 rounded-xl ${daysLeft < 7 ? "bg-red-100 text-red-600" : daysLeft < 30 ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700"}`}>
                         {daysLeft}d left
                       </span>
                     </div>
                   </div>
+                  {/* Personal note */}
+                  <textarea
+                    value={examNotes[c.id] ?? ""}
+                    onChange={e => setExamNotes(p => ({ ...p, [c.id]: e.target.value }))}
+                    onClick={(e) => e.stopPropagation()}
+                    placeholder="Add a personal note or reminder for this exam..."
+                    rows={2}
+                    readOnly={editMode}
+                    className={`w-full text-xs rounded-xl border px-3 py-2 resize-none outline-none ${dm?"bg-gray-800 border-gray-700 text-gray-300 placeholder-gray-600":"bg-gray-50 border-gray-200 text-gray-700 placeholder-gray-400"}`}
+                  />
                 </div>
               );
             })}
+        </div>
+      )}
+
+      {/* ── EDIT PANEL MODAL ── */}
+      {editPanel && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4">
+          <div className={`w-full max-w-sm my-auto rounded-2xl shadow-xl p-5 space-y-4 ${dm?"bg-gray-800":"bg-white"}`}>
+
+            {/* Course edit */}
+            {(editPanel.type === "course") && (
+              <>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-bold text-indigo-500">{scratch.code}</p>
+                    <h3 className={`font-bold text-sm ${dm?"text-white":"text-gray-900"}`}>{scratch.title}</h3>
+                  </div>
+                  <button onClick={closePanel} className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"><X className="w-4 h-4"/></button>
+                </div>
+                <p className={`text-xs ${dm?"text-gray-400":"text-gray-500"}`}>These changes are local overrides visible only in your timetable view.</p>
+
+                {/* Days checkboxes */}
+                <div>
+                  <label className={`text-xs font-semibold block mb-1.5 ${dm?"text-gray-300":"text-gray-600"}`}>Lecture Days</label>
+                  <div className="flex flex-wrap gap-2">
+                    {allDays.map(d => (
+                      <button key={d} onClick={() => setScratch(p => ({
+                        ...p, days: p.days.includes(d) ? p.days.filter(x=>x!==d) : [...p.days, d]
+                      }))}
+                        className={`text-xs px-2.5 py-1 rounded-lg font-medium border ${scratch.days?.includes(d) ? "bg-indigo-600 text-white border-indigo-600" : dm?"border-gray-600 text-gray-400":"border-gray-300 text-gray-600"}`}>
+                        {d.slice(0,3)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Time */}
+                <div>
+                  <label className={`text-xs font-semibold block mb-1 ${dm?"text-gray-300":"text-gray-600"}`}>Time (e.g. 10:00 AM – 11:00 AM)</label>
+                  <input value={scratch.time ?? ""} onChange={e=>setScratch(p=>({...p,time:e.target.value}))}
+                    className={`w-full rounded-xl border px-3 py-2 text-sm outline-none ${dm?"bg-gray-700 border-gray-600 text-white":"bg-white border-gray-300 text-gray-900"}`}/>
+                </div>
+
+                {/* Venue */}
+                <div>
+                  <label className={`text-xs font-semibold block mb-1 ${dm?"text-gray-300":"text-gray-600"}`}>Venue</label>
+                  <input value={scratch.venue ?? ""} onChange={e=>setScratch(p=>({...p,venue:e.target.value}))}
+                    className={`w-full rounded-xl border px-3 py-2 text-sm outline-none ${dm?"bg-gray-700 border-gray-600 text-white":"bg-white border-gray-300 text-gray-900"}`}/>
+                </div>
+
+                <div className="flex gap-2 pt-1">
+                  {overrides[scratch.id] && (
+                    <button onClick={() => resetOverride(scratch.id)}
+                      className="px-3 py-2 text-xs font-medium rounded-xl text-red-600 border border-red-200 hover:bg-red-50">
+                      Reset
+                    </button>
+                  )}
+                  <button onClick={closePanel} className={`flex-1 py-2 rounded-xl border text-sm font-medium ${dm?"border-gray-600 text-gray-300":"border-gray-300 text-gray-600"}`}>Cancel</button>
+                  <button onClick={savePanel} className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">Save</button>
+                </div>
+              </>
+            )}
+
+            {(editPanel.type === "exam") && (
+              <>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-xs font-bold text-indigo-500">{scratch.code}</p>
+                    <h3 className={`font-bold text-sm ${dm?"text-white":"text-gray-900"}`}>{scratch.title}</h3>
+                  </div>
+                  <button onClick={closePanel} className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"><X className="w-4 h-4"/></button>
+                </div>
+                <p className={`text-xs ${dm?"text-gray-400":"text-gray-500"}`}>Edit your exam schedule override for this course.</p>
+
+                <div>
+                  <label className={`text-xs font-semibold block mb-1 ${dm?"text-gray-300":"text-gray-600"}`}>Exam Date</label>
+                  <input
+                    type="date"
+                    value={scratch.examDate ?? ""}
+                    onChange={e => setScratch(p => ({ ...p, examDate: e.target.value }))}
+                    className={`w-full rounded-xl border px-3 py-2 text-sm outline-none ${dm?"bg-gray-700 border-gray-600 text-white":"bg-white border-gray-300 text-gray-900"}`}
+                  />
+                </div>
+
+                <div>
+                  <label className={`text-xs font-semibold block mb-1 ${dm?"text-gray-300":"text-gray-600"}`}>Exam Time</label>
+                  <input
+                    value={scratch.examTime ?? ""}
+                    onChange={e => setScratch(p => ({ ...p, examTime: e.target.value }))}
+                    placeholder="e.g. 9:00 AM"
+                    className={`w-full rounded-xl border px-3 py-2 text-sm outline-none ${dm?"bg-gray-700 border-gray-600 text-white":"bg-white border-gray-300 text-gray-900"}`}
+                  />
+                </div>
+
+                <div>
+                  <label className={`text-xs font-semibold block mb-1 ${dm?"text-gray-300":"text-gray-600"}`}>Exam Venue</label>
+                  <input
+                    value={scratch.examVenue ?? ""}
+                    onChange={e => setScratch(p => ({ ...p, examVenue: e.target.value }))}
+                    className={`w-full rounded-xl border px-3 py-2 text-sm outline-none ${dm?"bg-gray-700 border-gray-600 text-white":"bg-white border-gray-300 text-gray-900"}`}
+                  />
+                </div>
+
+                <div className="flex gap-2 pt-1">
+                  {examOverrides[scratch.id] && (
+                    <button onClick={() => resetExamOverride(scratch.id)} className="px-3 py-2 text-xs font-medium rounded-xl text-red-600 border border-red-200 hover:bg-red-50">
+                      Reset
+                    </button>
+                  )}
+                  <button onClick={closePanel} className={`flex-1 py-2 rounded-xl border text-sm font-medium ${dm?"border-gray-600 text-gray-300":"border-gray-300 text-gray-600"}`}>Cancel</button>
+                  <button onClick={savePanel} className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700">Save</button>
+                </div>
+              </>
+            )}
+
+            {/* Custom entry edit / new */}
+            {(editPanel.type === "custom" || editPanel.type === "new") && (
+              <>
+                <div className="flex items-center justify-between">
+                  <h3 className={`font-bold text-sm ${dm?"text-white":"text-gray-900"}`}>
+                    {editPanel.type === "new" ? "Add Personal Entry" : "Edit Entry"}
+                  </h3>
+                  <button onClick={closePanel} className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"><X className="w-4 h-4"/></button>
+                </div>
+
+                <div className={`text-xs rounded-xl px-3 py-2 ${dm?"bg-gray-700 text-gray-400":"bg-gray-100 text-gray-500"}`}>
+                  {scratch.day} · {scratch.timeSlot}
+                </div>
+
+                <div>
+                  <label className={`text-xs font-semibold block mb-1 ${dm?"text-gray-300":"text-gray-600"}`}>Label <span className="text-red-500">*</span></label>
+                  <input value={scratch.label ?? ""} onChange={e=>setScratch(p=>({...p,label:e.target.value}))}
+                    placeholder="e.g. Study Group, Office Hours..."
+                    className={`w-full rounded-xl border px-3 py-2 text-sm outline-none ${dm?"bg-gray-700 border-gray-600 text-white placeholder-gray-500":"bg-white border-gray-300 text-gray-900 placeholder-gray-400"}`}/>
+                </div>
+
+                <div>
+                  <label className={`text-xs font-semibold block mb-1.5 ${dm?"text-gray-300":"text-gray-600"}`}>Colour</label>
+                  <div className="flex gap-2">
+                    {Object.keys(customColorMap).map(c => (
+                      <button key={c} onClick={()=>setScratch(p=>({...p,color:c}))}
+                        className={`w-7 h-7 rounded-full border-2 transition-all ${customColorMap[c].split(" ")[0]} ${scratch.color===c?"border-gray-900 scale-110":"border-transparent"}`}/>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex gap-2 pt-1">
+                  {editPanel.type === "custom" && (
+                    <button onClick={()=>deleteEntry(scratch.id)} className="px-3 py-2 text-xs font-medium rounded-xl text-red-600 border border-red-200 hover:bg-red-50">
+                      Delete
+                    </button>
+                  )}
+                  <button onClick={closePanel} className={`flex-1 py-2 rounded-xl border text-sm font-medium ${dm?"border-gray-600 text-gray-300":"border-gray-300 text-gray-600"}`}>Cancel</button>
+                  <button onClick={savePanel} disabled={!scratch.label?.trim()}
+                    className="flex-1 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">
+                    {editPanel.type === "new" ? "Add" : "Save"}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -438,7 +1028,7 @@ function TimetableView({ dm, registeredCourses, timetableType, setTimetableType,
 }
 
 // ─── COURSE DETAIL PAGE ───────────────────────────────────────────────────────
-function CourseDetail({ course, dm, onBack, detailTab, setDetailTab, isRegistered, announcements, assignments }) {
+function CourseDetail({ course, dm, onBack, detailTab, setDetailTab, announcements, assignments }) {
   return (
     <div className="space-y-4 slide-in">
       {/* Header */}
@@ -467,12 +1057,15 @@ function CourseDetail({ course, dm, onBack, detailTab, setDetailTab, isRegistere
           { id:"timetable",   label:"Schedule",    icon:CalendarDays  },
           { id:"assignments", label:"Assignments", icon:ClipboardList },
           { id:"ai",          label:"AI Notes",    icon:Brain         },
-        ].map(({ id, label, icon:Icon }) => (
-          <button key={id} onClick={()=>setDetailTab(id)}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold flex-shrink-0 transition-all ${detailTab===id?"bg-indigo-600 text-white shadow":"text-gray-500 hover:text-gray-800"}`}>
-            <Icon className="w-3.5 h-3.5"/>{label}
-          </button>
-        ))}
+        ].map(({ id, label, icon }) => {
+          const DetailIcon = icon;
+          return (
+            <button key={id} onClick={()=>setDetailTab(id)}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold shrink-0 transition-all ${detailTab===id?"bg-indigo-600 text-white shadow":"text-gray-500 hover:text-gray-800"}`}>
+              <DetailIcon className="w-3.5 h-3.5"/>{label}
+            </button>
+          );
+        })}
       </div>
 
       {/* ── INFO TAB ── */}
@@ -536,7 +1129,7 @@ function CourseDetail({ course, dm, onBack, detailTab, setDetailTab, isRegistere
             <div className="p-3 space-y-2">
               {course.days.map(day => (
                 <div key={day} className={`flex items-center gap-3 p-3 rounded-xl ${dm?"bg-gray-800":"bg-indigo-50"}`}>
-                  <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white text-xs font-bold shrink-0">
                     {day.slice(0,3)}
                   </div>
                   <div>
@@ -563,15 +1156,18 @@ function CourseDetail({ course, dm, onBack, detailTab, setDetailTab, isRegistere
                 { label:"Date",  value:course.examDate, icon:Calendar },
                 { label:"Time",  value:course.examTime, icon:Clock    },
                 { label:"Venue", value:course.examVenue,icon:MapPin   },
-              ].map(({ label, value, icon:Icon }) => (
-                <div key={label} className={`flex items-center gap-3 p-3 rounded-xl ${dm?"bg-gray-800":"bg-rose-50"}`}>
-                  <Icon className="w-4 h-4 text-rose-500 flex-shrink-0"/>
-                  <div>
-                    <p className={`text-xs ${dm?"text-gray-500":"text-gray-400"}`}>{label}</p>
-                    <p className="text-sm font-semibold">{value}</p>
+              ].map(({ label, value, icon }) => {
+                const ScheduleIcon = icon;
+                return (
+                  <div key={label} className={`flex items-center gap-3 p-3 rounded-xl ${dm?"bg-gray-800":"bg-rose-50"}`}>
+                    <ScheduleIcon className="w-4 h-4 text-rose-500 shrink-0"/>
+                    <div>
+                      <p className={`text-xs ${dm?"text-gray-500":"text-gray-400"}`}>{label}</p>
+                      <p className="text-sm font-semibold">{value}</p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -595,7 +1191,7 @@ function CourseDetail({ course, dm, onBack, detailTab, setDetailTab, isRegistere
               <div key={a.id} className={`rounded-2xl border p-4 ${dm?"bg-gray-900 border-gray-800":"bg-white border-gray-100"}`}>
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <p className={`text-sm font-semibold ${dm?"text-white":"text-gray-900"}`}>{a.title}</p>
-                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize flex-shrink-0 ${statusStyle}`}>{a.status}</span>
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize shrink-0 ${statusStyle}`}>{a.status}</span>
                 </div>
                 <div className="flex items-center gap-4">
                   <span className={`text-xs flex items-center gap-1 ${dm?"text-gray-400":"text-gray-500"}`}><Clock className="w-3 h-3"/> Due {a.deadline}</span>
@@ -626,7 +1222,6 @@ function CourseDetail({ course, dm, onBack, detailTab, setDetailTab, isRegistere
 function AINotesPanel({ dm, course }) {
   const [loading, setLoading]   = useState(false);
   const [summary, setSummary]   = useState(null);
-  const [topic, setTopic]       = useState("");
   const [asked, setAsked]       = useState("");
   const [qaResult, setQaResult] = useState(null);
   const [qaLoading, setQaLoading] = useState(false);
@@ -664,7 +1259,7 @@ Format your response as JSON with this exact structure (no markdown, pure JSON):
       const text = data.content?.map(b => b.text || "").join("").trim();
       const clean = text.replace(/```json|```/g,"").trim();
       setSummary(JSON.parse(clean));
-    } catch(e) {
+    } catch {
       setSummary({ error: "Could not load AI summary. Please try again." });
     }
     setLoading(false);
@@ -691,7 +1286,7 @@ Give a clear, direct answer in 3-5 sentences. Use simple language.`;
       });
       const data = await res.json();
       setQaResult(data.content?.map(b => b.text || "").join("").trim());
-    } catch(e) {
+    } catch {
       setQaResult("Could not get an answer. Please try again.");
     }
     setQaLoading(false);
@@ -700,7 +1295,7 @@ Give a clear, direct answer in 3-5 sentences. Use simple language.`;
   return (
     <div className="space-y-4 fade-up">
       {/* Banner */}
-      <div className="rounded-2xl p-4 bg-gradient-to-r from-violet-600 to-indigo-600 text-white">
+      <div className="rounded-2xl p-4 bg-linear-to-r from-violet-600 to-indigo-600 text-white">
         <div className="flex items-center gap-2 mb-1">
           <Brain className="w-5 h-5"/>
           <p className="font-bold text-sm" style={{fontFamily:"Sora"}}>AI Lecture Notes</p>
@@ -712,7 +1307,7 @@ Give a clear, direct answer in 3-5 sentences. Use simple language.`;
       {/* Generate Button */}
       {!summary && !loading && (
         <button onClick={generateSummary}
-          className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-semibold text-sm hover:opacity-90 transition-all">
+          className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-linear-to-r from-violet-600 to-indigo-600 text-white font-semibold text-sm hover:opacity-90 transition-all">
           <Sparkles className="w-4 h-4"/> Generate Lecture Summary for {course.code}
         </button>
       )}
@@ -757,7 +1352,7 @@ Give a clear, direct answer in 3-5 sentences. Use simple language.`;
                 <div key={w.week}>
                   <button onClick={() => setActiveSection(activeSection===w.week ? null : w.week)}
                     className={`w-full flex items-center gap-3 p-3 text-left hover:bg-gray-50 transition-all ${dm?"hover:bg-gray-800":""}`}>
-                    <div className="w-8 h-8 rounded-xl bg-indigo-100 flex items-center justify-center text-indigo-700 text-xs font-bold flex-shrink-0">
+                    <div className="w-8 h-8 rounded-xl bg-indigo-100 flex items-center justify-center text-indigo-700 text-xs font-bold shrink-0">
                       W{w.week}
                     </div>
                     <p className="text-sm font-medium flex-1">{w.title}</p>
@@ -779,7 +1374,7 @@ Give a clear, direct answer in 3-5 sentences. Use simple language.`;
             <div className="space-y-2">
               {summary.examTips?.map((t,i) => (
                 <div key={i} className={`flex gap-2.5 p-2.5 rounded-xl ${dm?"bg-amber-950/30 text-amber-200":"bg-amber-50 text-amber-800"}`}>
-                  <CheckCircle2 className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5"/>
+                  <CheckCircle2 className="w-4 h-4 text-amber-500 shrink-0 mt-0.5"/>
                   <p className="text-xs">{t}</p>
                 </div>
               ))}
@@ -826,7 +1421,7 @@ Give a clear, direct answer in 3-5 sentences. Use simple language.`;
               placeholder={`Ask anything about ${course.code}...`}
               className={`flex-1 text-sm p-2.5 rounded-xl border focus:outline-none focus:border-violet-400 ${dm?"bg-gray-800 border-gray-700 text-white placeholder-gray-600":"bg-gray-50 border-gray-200"}`}/>
             <button onClick={askQuestion} disabled={qaLoading || !asked.trim()}
-              className="px-3 py-2 bg-violet-600 text-white rounded-xl hover:bg-violet-700 disabled:opacity-50 flex items-center gap-1.5 text-xs font-medium flex-shrink-0">
+              className="px-3 py-2 bg-violet-600 text-white rounded-xl hover:bg-violet-700 disabled:opacity-50 flex items-center gap-1.5 text-xs font-medium shrink-0">
               {qaLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin"/> : <Sparkles className="w-3.5 h-3.5"/>}
               Ask
             </button>
@@ -848,7 +1443,7 @@ Give a clear, direct answer in 3-5 sentences. Use simple language.`;
 
           {qaLoading && (
             <div className="flex items-center gap-2 p-3 rounded-xl bg-violet-50">
-              <Loader2 className="w-4 h-4 text-violet-600 animate-spin flex-shrink-0"/>
+              <Loader2 className="w-4 h-4 text-violet-600 animate-spin shrink-0"/>
               <p className="text-xs text-violet-700">Claude is thinking...</p>
             </div>
           )}
